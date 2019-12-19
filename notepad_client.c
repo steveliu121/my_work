@@ -82,14 +82,63 @@ static void __get_notepad(char *notepad)
 }
 
 /**
+ * 发送并接受消息
+ * */
+static int __send_and_recv(const int sockfd,
+				const char *send_buf,
+				char *recv_buf,
+				const int send_len, const int recv_size)
+{
+	int ret = 0;
+
+	ret = send(sockfd, send_buf, send_len, 0);
+	if (ret != send_len) {
+		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+	ret = recv(sockfd, recv_buf, sizeof(recv_buf), 0);
+	if (ret == -1) {
+		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+out:
+	return ret;
+}
+
+/**
  * 向服务器注册
  * */
 static int user_register(const int sockfd)
 {
 	char username[128] = {0};
+	char msg[256] = {0};
+	char buf[256] = {0};
+	int msg_len = 0;
+	int ret = 0;
 
 	__get_username(username);
-	/*TODO check name valid*/
+
+	snprintf(msg, strlen(username), "register:%s", username);
+	msg_len = strlen(msg);
+
+	ret = __send_and_recv(sockfd, msg, buf, msg_len, sizeof(buf));
+	if (ret)
+		goto out;
+
+	if (strncmp(buf, "success", strlen(buf))) {
+		ret = -1;
+		fprintf(stdout, "Register:%s\n", buf);
+	}
+
+out:
+	if (ret)
+		fprintf(stdout, "Register fail\n");
+
+	return ret;
 }
 
 /**
@@ -98,34 +147,149 @@ static int user_register(const int sockfd)
 static int user_login(const int sockfd)
 {
 	char username[128] = {0};
+	char msg[256] = {0};
+	char buf[256] = {0};
+	int msg_len = 0;
+	int ret = 0;
 
 	__get_username(username);
-	/*TODO check name valid*/
+
+	snprintf(msg, strlen(username), "login:%s", username);
+	msg_len = strlen(msg);
+
+	ret = __send_and_recv(sockfd, msg, buf, msg_len, sizeof(buf));
+	if (ret)
+		goto out;
+
+	if (strncmp(buf, "success", strlen(buf))) {
+		ret = -1;
+		fprintf(stdout, "Login:%s\n", buf);
+	}
+
+out:
+	if (ret)
+		fprintf(stdout, "Login fail\n");
+
+	return ret;
 }
 
+/**
+ * 列出当前用户的所有记事本
+ * */
 static int notepad_list(const int sockfd)
 {
+	char msg[256] = {0};
+	char buf[4096] = {0};
+	int msg_len = 0;
+	int ret = 0;
+
+	sprintf(msg, "list:all");
+	msg_len = strlen(msg);
+
+	ret = send(sockfd, msg, msg_len, 0);
+	if (ret != msg_len) {
+		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+	do {
+		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
+		if (ret == -1) {
+			fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
+			ret = -1;
+			goto out;
+		}
+
+		fprintf(stdout, "%s", buf);
+		fflush(stdout);
+	} while (ret == (sizeof(buf) - 1));
+
+out:
+	if (ret)
+		fprintf(stdout, "List notepads fail\n");
+
+	return ret;
 }
 
+/**
+ * 创建，编辑并上传记事本
+ * */
 static int notepad_create(const int sockfd)
 {
 	char notepad[128] = {0};
+	char msg[256] = {0};
+	char buf[256] = {0};
+	int msg_len = 0;
+	int ret = 0;
 
 	__get_notepad(notepad);
+
+	snprintf(msg, strlen(notepad), "create:%s", notepad);
+	msg_len = strlen(msg);
+
+	/*TODO send filename, edit file, upload file*/
+
+out:
+	if (ret)
+		fprintf(stdout, "Create notepad [%s] fail\n", notepad);
+
+	return ret;
 }
 
 static int notepad_delete(const int sockfd)
 {
 	char notepad[128] = {0};
+	char msg[256] = {0};
+	char buf[256] = {0};
+	int msg_len = 0;
+	int ret = 0;
 
 	__get_notepad(notepad);
+
+	snprintf(msg, strlen(notepad), "delete:%s", notepad);
+	msg_len = strlen(msg);
+
+	ret = __send_and_recv(sockfd, msg, buf, msg_len, sizeof(buf));
+	if (ret)
+		goto out;
+
+	if (strncmp(buf, "success", strlen(buf)))
+		ret = -1;
+
+out:
+	if (ret)
+		fprintf(stdout, "Delete notepad [%s] fail\n", notepad);
+
+	return ret;
 }
 
+/*TODO*/
 static int notepad_edit(const int sockfd)
 {
 	char notepad[128] = {0};
+	char msg[256] = {0};
+	char buf[256] = {0};
+	int msg_len = 0;
+	int ret = 0;
 
 	__get_notepad(notepad);
+
+	snprintf(msg, strlen(notepad), "edit:%s", notepad);
+	msg_len = strlen(msg);
+
+	ret = __send_and_recv(sockfd, msg, buf, msg_len, sizeof(buf));
+	if (ret)
+		goto out;
+
+	if (strncmp(buf, "success", strlen(buf)))
+		ret = -1;
+
+out:
+	if (ret)
+		fprintf(stdout, "Edit notepad [%s] fail\n", notepad);
+
+	return ret;
 }
 
 static int notepad_upload(const int sockfd)
