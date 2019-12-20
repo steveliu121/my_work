@@ -9,10 +9,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <dirent.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <syslog.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <poll.h>
 #include <pthread.h>
 
@@ -36,9 +38,54 @@ static void sig_handle(int sig)
 static void print_usage(void)
 {
 	fprintf(stdout, "Usage:\n");
-	fprintf(stdout, "./notepad_server <server_port>\n");
+	fprintf(stdout, "./notepad_server -p <server_port>\n");
 	fprintf(stdout, "example:\n");
-	fprintf(stdout, "\t./notepad_client 1037\nn");
+	fprintf(stdout, "\t./notepad_server -p 1037\nn");
+}
+
+/**获取所有文件（记事本文件）
+ * 成功：返回文件的大小，失败：返回-1*/
+static int __get_file_list(const char *username, FILE *file_p)
+{
+	struct dirent *dir_entry = NULL;
+	char path[256] = {0};
+	char file_entry[128] = {0};
+	int index = 0;
+	DIR *dirp = NULL;
+	int size = 0;
+	int ret = 0;
+
+	snprintf(path, sizeof(path) - 1, "%s/%s", FILE_DIR, username);
+
+	dirp = opendir(path);
+	if (!dirp) {
+		fprintf(stdout, "open directory %s fail, [%s]\n", path, strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+	errno = 0;
+	do {
+		dir_entry = readdir(dirp);
+		if (dir_entry) {
+			index++;
+			snprintf(file_entry, sizeof(file_entry) - 1, "%d. %s\r\n", index, dir_entry->d_name);
+			size += strlen(file_entry);
+			ret = fwrite(file_entry, 1, strlen(file_entry), file_p);
+			if (ret != strlen(file_entry))
+				fprintf(stderr, "write tmpfile fail\n");
+		} else if (errno) {
+			fprintf(stderr, "read directory %s fail, [%s]\n", path, strerror(errno));
+			ret = -1;
+		}
+
+	} while (dir_entry);
+
+out:
+	if (dirp)
+		closedir(dirp);
+
+	return size ? size : -1;
 }
 
 static int __get_ipaddr(const int sockfd)
@@ -51,6 +98,7 @@ static int __get_ipaddr(const int sockfd)
 	const char *ret1;
 
 	bzero(&own_addr, sizeof(own_addr));
+	addrlen = sizeof(own_addr);
 	ret = getsockname(sockfd, (struct sockaddr *)&own_addr, &addrlen);
 	if (ret) {
 		fprintf(stderr, "%s\n", strerror(errno));
@@ -91,7 +139,7 @@ static int __create_server_socket(const int port)
 	own_addr.sin_port = htons(port);
 
 	/*创建IPV4 TCP套接字*/
-	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_TCP);
+	sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sockfd ==-1) {
 		fprintf(stdout, "Create socket fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -156,7 +204,7 @@ static int inline __poll(const int sockfd, int timeout_ms, short events)
 	return ret;
 }
 
-static int __send_response(const int sockfd, char *msg)
+static int __send_response(const int sockfd, const char *msg)
 {
 	int ret = 0;
 	int msg_len = strlen(msg);
@@ -173,68 +221,237 @@ static int __send_response(const int sockfd, char *msg)
 static void do_register(const int sockfd, const char *name)
 {
 	char path[128] = {0};
+	char msg[128] = {0};
 	int ret = 0;
 
 	snprintf(path, sizeof(path) - 1, "%s/%s", FILE_DIR, name);
-	if (!access(path, F_OK))
-		__send_response(sockfd, "The username you entered is already in use");
+	if (!access(path, F_OK)) {
+		strcpy(msg, "The username you entered is already in use\n");
+		__send_response(sockfd, msg);
+		return;
+	}
 
 	ret = __create_cache_dir(path);
-	if (ret)
-		__send_response(sockfd, "Create account fail");
-	else
-		__send_response(sockfd, "success");
+	if (ret) {
+		strcpy(msg, "Create account fail\n");
+		__send_response(sockfd, msg);
+	}
+	else {
+		strcpy(msg, "success");
+		__send_response(sockfd, msg);
+	}
 }
 
 static void do_login(const int sockfd, const char *name, char *username)
 {
 	char path[128] = {0};
+	char msg[128] = {0};
 	int ret = 0;
 
 	snprintf(path, sizeof(path) - 1, "%s/%s", FILE_DIR, name);
-	if (access(path, F_OK))
-		__send_response(sockfd, "The username you entered is not exist, please register one");
+	if (access(path, F_OK)) {
+		strcpy(msg, "The username you entered is not exist, please register one\n");
+		__send_response(sockfd, msg);
+	}
 	else {
 		strncpy(username, name, sizeof(username) - 1);
-		__send_response(sockfd, "success");
+		strcpy(msg, "success");
+		__send_response(sockfd, msg);
 	}
 }
 
 static void do_list(const int sockfd, const char *username)
 {
-	char *buf = NULL;
+	FILE *tmp_file = NULL;
+	char msg[128] = {0};
+	int fd = -1;
+	int size = 0;
+	int ret = 0;
 
-	if (!strncmp("null", username, strlen(username)))
-		__send_response(sockfd, "Please login first\n");
+	/*检查用户是否已经登录*/
+	if (!strncmp("null", username, strlen(username))) {
+		strcpy(msg, "Please login first\n");
+		__send_response(sockfd, msg);
+		return;
+	}
 
-	ret = __get_file_list(username, &buf);
-	if (ret)
-		__send_response(sockfd, "");
+	/*TODO dose tmpfile could be sendfile??*/
+	/*获取文件列表（记事本列表）并发送给客户端*/
+	tmp_file = tmpfile();
+	if (!tmp_file) {
+		fprintf(stderr, "Create tmpfile fail, [%s]\n", strerror(errno));
+		goto err;
+	}
 
-	__send_response(sockfd, buf);
+	size = __get_file_list(username, tmp_file);
+	if (size == -1)
+		goto err;
 
-	free(buf);
+	fd = fileno(tmp_file);
+	if (fd == -1) {
+		fprintf(stderr, "Get tmpfile file descriptor fail, bad file pointer\n");
+		goto err;
+	}
+
+	ret = sendfile(sockfd, fd, NULL, size);
+	if (ret != size) {
+		fprintf(stderr, "Send file to server error, [%s]\n", strerror(errno));
+		ret = -1;
+		goto err;
+	}
+
+	fclose(tmp_file);
+
+	return;
+err:
+	if (tmp_file)
+		fclose(tmp_file);
+
+
+	strcpy(msg, "Get notepad list fail\n");
+	__send_response(sockfd, msg);
 }
 
-static void do_create(const int sockfd, const char *name, const char *username)
+static void do_create(const int sockfd, const char *file, const char *username)
 {
-	if (!strncmp("null", username, strlen(username)))
-		__send_response(sockfd, "Please login first\n");
+	int fd = -1;
+	char path[256] = {0};
+	char msg[128] = {0};
 
+	/*检查用户是否已经登录*/
+	if (!strncmp("null", username, strlen(username))) {
+		strcpy(msg, "Please login first\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*检查文件是否已经存在*/
+	snprintf(path, sizeof(path) - 1, "%s/%s/", FILE_DIR, username);
+	strcat(path, file);
+	if (!access(path, F_OK)) {
+		strcpy(msg, "Notepad already exist\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*创建文件（记事本）*/
+	fd = open(path, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		fprintf(stderr, "Create notepad fail, [%s]\n", strerror(errno));
+		strcpy(msg, "Notepad create fail\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+	close(fd);
+
+	strcpy(msg, "success");
+	__send_response(sockfd, msg);
 }
 
-static void do_delete(const int sockfd, const char *name, const char *username)
+static void do_delete(const int sockfd, const char *file, const char *username)
 {
-	if (!strncmp("null", username, strlen(username)))
-		__send_response(sockfd, "Please login first\n");
+	char path[256] = {0};
+	char msg[128] = {0};
 
+	/*检查用户是否已经登录*/
+	if (!strncmp("null", username, strlen(username))) {
+		strcpy(msg, "Please login first\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*检查文件是否已经存在*/
+	snprintf(path, sizeof(path) - 1, "%s/%s/", FILE_DIR, username);
+	strcat(path, file);
+	if (access(path, F_OK)) {
+		strcpy(msg, "Notepad not exist\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*删除文件（记事本）*/
+	remove(path);
+	strcpy(msg, "success");
+	__send_response(sockfd, msg);
 }
 
-static void do_edit(const int sockfd, const char *name, const char *username)
+static void do_edit(const int sockfd, const char *file, const char *username)
 {
-	if (!strncmp("null", username, strlen(username)))
-		__send_response(sockfd, "Please login first\n");
+	char path[256] = {0};
+	char buf[4096] = {0};
+	char msg[128] = {0};
+	int fd = -1;
+	int size = 0;
+	int success = 1;
+	int ret = 0;
 
+	/*检查用户是否已经登录*/
+	if (!strncmp("null", username, strlen(username))) {
+		strcpy(msg, "Please login first\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*检查文件是否已经存在*/
+	snprintf(path, sizeof(path) - 1, "%s/%s/", FILE_DIR, username);
+	strcat(path, file);
+	if (access(path, F_OK)) {
+		strcpy(msg, "Notepad not exist\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+
+	/*将文件发送给客户端，以供客户端编辑*/
+	size = __get_file_size(path);
+	fd = open(path, O_RDWR, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		strcpy(msg, "Open notepad fail\n");
+		__send_response(sockfd, msg);
+		return;
+	}
+	strcpy(msg, "success");
+	__send_response(sockfd, msg);
+	ret = sendfile(sockfd, fd, NULL, size);
+	if (ret != size)
+		fprintf(stderr, "Send file to client error, [%s]\n", strerror(errno));
+	close(fd);
+	fd = -1;
+
+	/*等待客户端编辑完成后将文件发送回来*/
+	fd = open(path, O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		strcpy(msg, "Could not save notepad\n");
+		__send_response(sockfd, msg);
+		success = 0;
+		goto out;
+	}
+	do {
+		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
+		if (ret == -1) {
+			strcpy(msg, "Recv notepad fail\n");
+			__send_response(sockfd, msg);
+			success = 0;
+			goto out;
+		}
+
+		size = ret;
+		ret = write(fd, buf, size);
+		if (ret != size) {
+			strcpy(msg, "Save notepad fail\n");
+			__send_response(sockfd, msg);
+			success = 0;
+		}
+
+	} while (ret == (sizeof(buf) - 1));
+
+	if (success) {
+		strcpy(msg, "success");
+		__send_response(sockfd, msg);
+	}
+
+out:
+	if (fd)
+		close(fd);
 }
 
 static int do_job(const int sockfd, char *buf, const int len, char *username)
@@ -250,19 +467,19 @@ static int do_job(const int sockfd, char *buf, const int len, char *username)
 	strncpy(key, token, sizeof(key));
 	strncpy(value, input, sizeof(value));
 
-	if (strncmp("register", key, strlen(key)))
+	if (!strncmp("register", key, strlen(key)))
 		do_register(sockfd, value);
-	else if (strncmp("login", key, strlen(key)))
+	else if (!strncmp("login", key, strlen(key)))
 		do_login(sockfd, value, username);
-	else if (strncmp("list", key, strlen(key)))
+	else if (!strncmp("list", key, strlen(key)))
 		do_list(sockfd, username);
-	else if (strncmp("create", key, strlen(key)))
+	else if (!strncmp("create", key, strlen(key)))
 		do_create(sockfd, value, username);
-	else if (strncmp("delete", key, strlen(key)))
+	else if (!strncmp("delete", key, strlen(key)))
 		do_delete(sockfd, value, username);
-	else if (strncmp("edit", key, strlen(key)))
+	else if (!strncmp("edit", key, strlen(key)))
 		do_edit(sockfd, value,username);
-	else if (strncmp("quit", key, strlen(key)))
+	else if (!strncmp("quit", key, strlen(key)))
 		ret = 1;
 
 	return ret;
@@ -288,6 +505,8 @@ static void *__work_thread(void *arg)
 		if (recv_len == -1)
 			fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
 
+printf("~~~~~~recv:%s\n", buf);
+
 		ret = do_job(sockfd, buf, recv_len, username);
 		/*接收到客户端的quit信息后，跳出循环*/
 		if (ret)
@@ -306,7 +525,7 @@ static void server_main(const int port)
 	pthread_t tid;
 
 	listen_sockfd = __create_server_socket(port);
-	if (listen_sockfd) {
+	if (listen_sockfd == -1) {
 		ret = -1;
 		goto out;
 	}
@@ -345,7 +564,7 @@ int main(int argc, char *argv[])
 	signal(SIGINT, sig_handle);
 	signal(SIGTERM, sig_handle);
 
-	if (argc != 2) {
+	if (argc != 3) {
 		print_usage();
 		return -1;
 	}

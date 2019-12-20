@@ -7,12 +7,11 @@ CLIENT = notepad_client
 all: $(SERVER) $(CLIENT)
 
 $(SERVER): notepad_server.c utils.c
-	$(CC) -o $@ $^
+	$(CC) -o $@ $^ -lpthread
 
 $(CLIENT): notepad_client.c utils.c
-	$(CC) -o $@ $^
+	$(CC) -o $@ $^ -lpthread
 
 clean:
 	rm $(SERVER)
 	rm $(CLIENT)
-	rm *.o

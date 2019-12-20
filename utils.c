@@ -52,6 +52,8 @@ int __create_cache_dir(const char *dir)
 		return 0;
 	}
 
+printf("~~~~~mkdir:%s\n", dir);
+
 	ret = mkdir(dir, S_IRWXU | S_IRWXG | S_IROTH);
 	if (ret) {
 		fprintf(stderr, "Create file cache directory fail, [%s]\n",

@@ -12,6 +12,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 
 #include "./utils.h"
 
@@ -47,9 +48,9 @@ static void sig_handle(int sig)
 static void print_usage(void)
 {
 	fprintf(stdout, "Usage:\n");
-	fprintf(stdout, "./notepad_client <server_ip> <server_port>\n");
+	fprintf(stdout, "./notepad_client -i <server_ip> -p <server_port>\n");
 	fprintf(stdout, "example:\n");
-	fprintf(stdout, "\t./notepad_client 192.168.1.101 1037\nn");
+	fprintf(stdout, "\t./notepad_client -i 192.168.1.101 -p 1037\nn");
 }
 
 /**
@@ -57,7 +58,7 @@ static void print_usage(void)
  * */
 static void __clear_window(void)
 {
-	fprintf(stdout, "\033c");
+	/* fprintf(stdout, "\033c"); */
 }
 
 static void __get_username(char *username)
@@ -134,6 +135,7 @@ static int __send_and_recv(const int sockfd,
 	int ret = 0;
 
 	ret = send(sockfd, send_buf, send_len, 0);
+printf("~~~~~send:%s\n", send_buf);
 	if (ret != send_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -141,11 +143,14 @@ static int __send_and_recv(const int sockfd,
 	}
 
 	ret = recv(sockfd, recv_buf, sizeof(recv_buf), 0);
+printf("~~~~~recv:%s\n", recv_buf);
 	if (ret == -1) {
 		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
 		ret = -1;
 		goto out;
 	}
+
+	ret = 0;
 
 out:
 	return ret;
@@ -368,8 +373,10 @@ static int notepad_edit(const int sockfd)
 	if (ret)
 		goto out;
 
-	if (strncmp(buf, "success", strlen(buf)))
+	if (strncmp(buf, "success", strlen(buf))) {
 		ret = -1;
+		goto out;
+	}
 
 	/*2. 创建本地临时文件*/
 	snprintf(file, sizeof(file) - 1, "%s/%s", FILE_DIR, notepad);
@@ -444,7 +451,7 @@ static int server_connect(const char *ipaddr, const int port)
 	peer_addr.sin_port = htons(port);
 
 	/*创建IPV4 TCP套接字*/
-	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_TCP);
+	sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sockfd ==-1) {
 		fprintf(stdout, "Create socket fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -506,7 +513,7 @@ int main(int argc, char *argv[])
 	signal(SIGINT, sig_handle);
 	signal(SIGTERM, sig_handle);
 
-	if (argc != 3) {
+	if (argc != 5) {
 		print_usage();
 		return -1;
 	}
@@ -551,7 +558,12 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "Type a number or 'q' to exit\n");
 
 		fgets(console_input, 127, stdin);
-		cmd_index = atoi(console_input);
+		if (!strncmp(console_input, "q", 1))
+			goto exit;
+		else
+			cmd_index = atoi(console_input);
+
+printf("~~~~~cmd_index:%d, %s\n", cmd_index, console_input);
 
 		__clear_window();
 
@@ -563,8 +575,6 @@ int main(int argc, char *argv[])
 				ret = user_login(sockfd);
 				success = ret ? 0 : 1;
 				break;
-			case 'q':
-				goto exit;
 			default:
 				fprintf(stdout, "Unknown input message\n");
 				break;
@@ -590,7 +600,10 @@ int main(int argc, char *argv[])
 		fprintf(stdout, "Type a number or 'q' to exit\n");
 
 		fgets(console_input, 127, stdin);
-		cmd_index = atoi(console_input);
+		if (!strncmp(console_input, "q", 1))
+			goto exit;
+		else
+			cmd_index = atoi(console_input);
 
 		__clear_window();
 
@@ -607,8 +620,6 @@ int main(int argc, char *argv[])
 			case EDIT:
 				notepad_edit(sockfd);
 				break;
-			case 'q':
-				goto exit;
 			default:
 				fprintf(stdout, "Unknown input message\n");
 				break;
