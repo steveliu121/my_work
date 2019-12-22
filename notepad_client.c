@@ -137,15 +137,15 @@ static int __send_and_recv(const int sockfd,
 	int ret = 0;
 
 	ret = send(sockfd, send_buf, send_len, 0);
-printf("~~~~~send:%s\n", send_buf);
+printf("~~~~~send:%s, %d\n", send_buf, send_len);
 	if (ret != send_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
 		goto out;
 	}
 
-	ret = recv(sockfd, recv_buf, sizeof(recv_buf), 0);
-printf("~~~~~recv:%s\n", recv_buf);
+	ret = recv(sockfd, recv_buf, recv_size, 0);
+printf("~~~~~recv:%s, %lu\n", recv_buf, strlen(recv_buf));
 	if (ret == -1) {
 		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -242,6 +242,7 @@ static int notepad_list(const int sockfd)
 		goto out;
 	}
 
+	fprintf(stdout, "=====NOTEPAD LIST=====\n");
 	do {
 		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
 		if (ret == -1) {
@@ -253,6 +254,8 @@ static int notepad_list(const int sockfd)
 		fprintf(stdout, "%s", buf);
 		fflush(stdout);
 	} while (ret == (sizeof(buf) - 1));
+	ret = 0;
+	fprintf(stdout, "=====================\n");
 
 out:
 	if (ret)
@@ -395,6 +398,8 @@ static int notepad_edit(const int sockfd)
 
 	/*3. 接受服务器发送过来的记事本并保存到本地临时文件*/
 	do {
+printf("~~~~%d\n", __LINE__);
+/*TODO not block here in case there's no data*/
 		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
 		if (ret == -1) {
 			fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
@@ -470,18 +475,6 @@ static int server_connect(const char *ipaddr, const int port)
 			&optval, sizeof(optval));
 	if (ret) {
 		fprintf(stdout, "warning reuse socket address fail, [%s]\n",
-							strerror(errno));
-		ret = -1;
-		goto out;
-	}
-
-	optval = 1;
-	/*设置套接字选项TCP_NODELAY,
-	 * 避免TCP发包粘连*/
-	ret = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY,
-			&optval, sizeof(optval));
-	if (ret) {
-		fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
 							strerror(errno));
 		ret = -1;
 		goto out;
@@ -614,7 +607,6 @@ printf("~~~~~imput:%s, %lu\n", console_input, strlen(console_input));
 		fprintf(stdout, "2. Create a new notepad\n");
 		fprintf(stdout, "3. Delete a notepad\n");
 		fprintf(stdout, "4. Edit a notepad\n");
-		fprintf(stdout, "5. Upload a notepad\n");
 		fprintf(stdout, "Type a number or 'q' to exit\n");
 
 		fgets(console_input, 127, stdin);

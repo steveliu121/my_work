@@ -21,7 +21,9 @@
 
 #include "utils.h"
 
+/*TODO segmentfault when quit*/
 #define FILE_DIR "./notepad"
+#define TMP_FILE ".tmpfile"
 
 static int g_exit;
 
@@ -46,7 +48,7 @@ static void print_usage(void)
 
 /**获取所有文件（记事本文件）
  * 成功：返回文件的大小，失败：返回-1*/
-static int __get_file_list(const char *username, FILE *file_p)
+static int __get_file_list(const char *username, const char *tmp_file)
 {
 	struct dirent *dir_entry = NULL;
 	char path[256] = {0};
@@ -54,6 +56,7 @@ static int __get_file_list(const char *username, FILE *file_p)
 	int index = 0;
 	DIR *dirp = NULL;
 	int size = 0;
+	int tmp_fd = -1;
 	int ret = 0;
 
 	snprintf(path, sizeof(path) - 1, "%s/%s", FILE_DIR, username);
@@ -62,31 +65,46 @@ static int __get_file_list(const char *username, FILE *file_p)
 	if (!dirp) {
 		fprintf(stdout, "open directory %s fail, [%s]\n", path, strerror(errno));
 		ret = -1;
-		goto out;
+		goto err;
 	}
 
+	tmp_fd = open(tmp_file, O_RDWR, S_IRUSR | S_IWUSR);
+	if (tmp_fd == -1) {
+		fprintf(stderr, "Open tmpfile %s fail, %s\n", tmp_file, strerror(errno));
+		ret = -1;
+		goto err;
+	}
 	errno = 0;
 	do {
 		dir_entry = readdir(dirp);
 		if (dir_entry) {
+			if (!strncmp(dir_entry->d_name, ".", 1) ||
+				!strncmp(dir_entry->d_name, "..", 2))
+				continue;
 			index++;
 			snprintf(file_entry, sizeof(file_entry) - 1, "%d. %s\r\n", index, dir_entry->d_name);
 			size += strlen(file_entry);
-			ret = fwrite(file_entry, 1, strlen(file_entry), file_p);
+			ret = write(tmp_fd, file_entry, strlen(file_entry));
 			if (ret != strlen(file_entry))
 				fprintf(stderr, "write tmpfile fail\n");
 		} else if (errno) {
 			fprintf(stderr, "read directory %s fail, [%s]\n", path, strerror(errno));
 			ret = -1;
 		}
-
 	} while (dir_entry);
 
-out:
+	close(tmp_fd);
+	closedir(dirp);
+
+	return size;
+
+err:
+	if (tmp_fd != -1)
+		close(tmp_fd);
 	if (dirp)
 		closedir(dirp);
 
-	return size ? size : -1;
+	return -1;
 }
 
 static int __get_ipaddr(const int sockfd)
@@ -159,18 +177,6 @@ static int __create_server_socket(const int port)
 		goto out;
 	}
 
-	optval = 1;
-	/*设置套接字选项TCP_NODELAY,
-	 * 避免TCP发包粘连*/
-	ret = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY,
-			&optval, sizeof(optval));
-	if (ret) {
-		fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
-							strerror(errno));
-		ret = -1;
-		goto out;
-	}
-
 	/*绑定服务器地址信息到套接字上*/
 	ret = bind(sockfd, (struct sockaddr *)&own_addr, sizeof(own_addr));
 	if (ret) {
@@ -223,7 +229,7 @@ static int __send_response(const int sockfd, const char *msg)
 	int msg_len = strlen(msg);
 
 	ret = send(sockfd, msg, msg_len, 0);
-printf("~~~~~send:%s\n", msg);
+printf("~~~~~send:%s, %d\n", msg, msg_len);
 	if (ret != msg_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -276,9 +282,9 @@ static void do_login(const int sockfd, const char *name, char *username)
 
 static void do_list(const int sockfd, const char *username)
 {
-	FILE *tmp_file = NULL;
+	int tmp_fd = -1;
+	char tmp_file[128] = {0};
 	char msg[128] = {0};
-	int fd = -1;
 	int size = 0;
 	int ret = 0;
 
@@ -291,36 +297,40 @@ static void do_list(const int sockfd, const char *username)
 
 	/*TODO dose tmpfile could be sendfile??*/
 	/*获取文件列表（记事本列表）并发送给客户端*/
-	tmp_file = tmpfile();
-	if (!tmp_file) {
+	/*创建一个临时文件来缓存未知大小的文件列表数据，模仿stream缓存*/
+	snprintf(tmp_file, sizeof(tmp_file) - 1, "%s/%s", FILE_DIR, TMP_FILE);
+	tmp_fd = open(tmp_file, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+	if (tmp_fd == -1) {
 		fprintf(stderr, "Create tmpfile fail, [%s]\n", strerror(errno));
 		goto err;
 	}
+	close(tmp_fd);
 
 	size = __get_file_list(username, tmp_file);
 	if (size == -1)
 		goto err;
-
-	fd = fileno(tmp_file);
-	if (fd == -1) {
-		fprintf(stderr, "Get tmpfile file descriptor fail, bad file pointer\n");
-		goto err;
+	else if (size == 0) {
+		strcpy(msg, "There's no notepad\n");
+		__send_response(sockfd, msg);
+		return;
 	}
 
-	ret = sendfile(sockfd, fd, NULL, size);
-	if (ret != size) {
-		fprintf(stderr, "Send file to server error, [%s]\n", strerror(errno));
+	tmp_fd = open(tmp_file, O_RDWR, S_IRUSR | S_IWUSR);
+	if (tmp_fd == -1) {
+		fprintf(stderr, "Open tmpfile %s fail, %s\n", tmp_file, strerror(errno));
 		ret = -1;
 		goto err;
 	}
-
-	fclose(tmp_file);
+	ret = sendfile(sockfd, tmp_fd, NULL, size);
+	if (ret != size) {
+		fprintf(stderr, "Send file to client error, ret[%d], [%s]\n", ret, strerror(errno));
+		ret = -1;
+		goto err;
+	}
+	close(tmp_fd);
 
 	return;
 err:
-	if (tmp_file)
-		fclose(tmp_file);
-
 
 	strcpy(msg, "Get notepad list fail\n");
 	__send_response(sockfd, msg);
@@ -362,7 +372,7 @@ static void do_create(const int sockfd, const char *file, const char *username)
 	}
 	close(fd);
 
-	/*回复客户端创建文集成功*/
+	/*回复客户端创建文件成功*/
 	strcpy(msg, "success");
 	__send_response(sockfd, msg);
 
@@ -385,16 +395,16 @@ static void do_create(const int sockfd, const char *file, const char *username)
 
 		size = ret;
 		ret = write(fd, buf, size);
-		if (ret != size) {
-			strcpy(msg, "Save notepad fail\n");
-			__send_response(sockfd, msg);
+		if (ret != size)
 			success = 0;
-		}
 
 	} while (ret == (sizeof(buf) - 1));
 
 	if (success) {
 		strcpy(msg, "success");
+		__send_response(sockfd, msg);
+	} else {
+		strcpy(msg, "Save notepad fail");
 		__send_response(sockfd, msg);
 	}
 
@@ -466,6 +476,8 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 	}
 	strcpy(msg, "success");
 	__send_response(sockfd, msg);
+	usleep(200000);
+	/*TODO fix packet adhesion in userspace layer*/
 	ret = sendfile(sockfd, fd, NULL, size);
 	if (ret != size)
 		fprintf(stderr, "Send file to client error, [%s]\n", strerror(errno));
@@ -569,6 +581,8 @@ printf("~~~~~~recv:%s\n", buf);
 	}
 
 	close(sockfd);
+
+	return NULL;
 }
 
 static void server_main(const int port)
@@ -577,7 +591,6 @@ static void server_main(const int port)
 	int listen_sockfd = -1;
 	int sub_sockfd = -1;
 	int *sockfd_p = NULL;
-	int optval = 0;
 	pthread_t tid;
 
 	listen_sockfd = __create_server_socket(port);
@@ -595,15 +608,6 @@ static void server_main(const int port)
 		if (sub_sockfd == -1)
 			fprintf(stderr, "Accept an error, [%s]", strerror(errno));
 		else {
-			optval = 1;
-			/*设置套接字选项TCP_NODELAY,
-			 * 避免TCP发包粘连*/
-			ret = setsockopt(sub_sockfd, IPPROTO_TCP, TCP_NODELAY,
-					&optval, sizeof(optval));
-			if (ret)
-				fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
-									strerror(errno));
-
 			sockfd_p = (int *)calloc(1, sizeof(int));
 			*sockfd_p = sub_sockfd;
 
