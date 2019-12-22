@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <syslog.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
@@ -158,6 +159,18 @@ static int __create_server_socket(const int port)
 		goto out;
 	}
 
+	optval = 1;
+	/*设置套接字选项TCP_NODELAY,
+	 * 避免TCP发包粘连*/
+	ret = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY,
+			&optval, sizeof(optval));
+	if (ret) {
+		fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
+							strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
 	/*绑定服务器地址信息到套接字上*/
 	ret = bind(sockfd, (struct sockaddr *)&own_addr, sizeof(own_addr));
 	if (ret) {
@@ -210,6 +223,7 @@ static int __send_response(const int sockfd, const char *msg)
 	int msg_len = strlen(msg);
 
 	ret = send(sockfd, msg, msg_len, 0);
+printf("~~~~~send:%s\n", msg);
 	if (ret != msg_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -317,6 +331,10 @@ static void do_create(const int sockfd, const char *file, const char *username)
 	int fd = -1;
 	char path[256] = {0};
 	char msg[128] = {0};
+	char buf[4096] = {0};
+	int success = 1;
+	int size = 0;
+	int ret = 0;
 
 	/*检查用户是否已经登录*/
 	if (!strncmp("null", username, strlen(username))) {
@@ -344,8 +362,45 @@ static void do_create(const int sockfd, const char *file, const char *username)
 	}
 	close(fd);
 
+	/*回复客户端创建文集成功*/
 	strcpy(msg, "success");
 	__send_response(sockfd, msg);
+
+	/*等待客户端编辑完成后将文件发送回来*/
+	fd = open(path, O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR);
+	if (fd == -1) {
+		strcpy(msg, "Could not save notepad\n");
+		__send_response(sockfd, msg);
+		success = 0;
+		goto out;
+	}
+	do {
+		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
+		if (ret == -1) {
+			strcpy(msg, "Recv notepad fail\n");
+			__send_response(sockfd, msg);
+			success = 0;
+			goto out;
+		}
+
+		size = ret;
+		ret = write(fd, buf, size);
+		if (ret != size) {
+			strcpy(msg, "Save notepad fail\n");
+			__send_response(sockfd, msg);
+			success = 0;
+		}
+
+	} while (ret == (sizeof(buf) - 1));
+
+	if (success) {
+		strcpy(msg, "success");
+		__send_response(sockfd, msg);
+	}
+
+out:
+	if (fd)
+		close(fd);
 }
 
 static void do_delete(const int sockfd, const char *file, const char *username)
@@ -522,6 +577,7 @@ static void server_main(const int port)
 	int listen_sockfd = -1;
 	int sub_sockfd = -1;
 	int *sockfd_p = NULL;
+	int optval = 0;
 	pthread_t tid;
 
 	listen_sockfd = __create_server_socket(port);
@@ -539,6 +595,15 @@ static void server_main(const int port)
 		if (sub_sockfd == -1)
 			fprintf(stderr, "Accept an error, [%s]", strerror(errno));
 		else {
+			optval = 1;
+			/*设置套接字选项TCP_NODELAY,
+			 * 避免TCP发包粘连*/
+			ret = setsockopt(sub_sockfd, IPPROTO_TCP, TCP_NODELAY,
+					&optval, sizeof(optval));
+			if (ret)
+				fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
+									strerror(errno));
+
 			sockfd_p = (int *)calloc(1, sizeof(int));
 			*sockfd_p = sub_sockfd;
 

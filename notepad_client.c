@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/sendfile.h>
 
@@ -69,7 +70,7 @@ static void __get_username(char *username)
 	fgets(console_input, 127, stdin);
 	fprintf(stdout, "\n");
 
-	strncpy(username, console_input, 128);
+	strncpy(username, console_input, strlen(console_input) - 1);
 }
 
 static void __get_notepad(char *notepad)
@@ -80,7 +81,7 @@ static void __get_notepad(char *notepad)
 	fgets(console_input, 127, stdin);
 	fprintf(stdout, "\n");
 
-	strncpy(notepad, console_input, 128);
+	strncpy(notepad, console_input, strlen(console_input) - 1);
 }
 
 static int __send_file(const int sockfd, const char *file)
@@ -114,6 +115,7 @@ static int __send_file(const int sockfd, const char *file)
 	}
 
 	if (strncmp(buf, "success", strlen(buf))) {
+		fprintf(stderr, "%s\n", buf);
 		ret = -1;
 		goto out;
 	}
@@ -297,6 +299,7 @@ static int notepad_create(const int sockfd)
 		goto out;
 
 	if (strncmp(buf, "success", strlen(buf))) {
+		fprintf(stderr, "%s\n", buf);
 		ret = -1;
 		goto out;
 	}
@@ -338,8 +341,10 @@ static int notepad_delete(const int sockfd)
 	if (ret)
 		goto out;
 
-	if (strncmp(buf, "success", strlen(buf)))
+	if (strncmp(buf, "success", strlen(buf))) {
+		fprintf(stderr, "%s\n", buf);
 		ret = -1;
+	}
 
 out:
 	if (ret)
@@ -374,6 +379,7 @@ static int notepad_edit(const int sockfd)
 		goto out;
 
 	if (strncmp(buf, "success", strlen(buf))) {
+		fprintf(stderr, "%s\n", buf);
 		ret = -1;
 		goto out;
 	}
@@ -464,6 +470,18 @@ static int server_connect(const char *ipaddr, const int port)
 			&optval, sizeof(optval));
 	if (ret) {
 		fprintf(stdout, "warning reuse socket address fail, [%s]\n",
+							strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+	optval = 1;
+	/*设置套接字选项TCP_NODELAY,
+	 * 避免TCP发包粘连*/
+	ret = setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY,
+			&optval, sizeof(optval));
+	if (ret) {
+		fprintf(stdout, "warning set tcp nodelay fail, [%s]\n",
 							strerror(errno));
 		ret = -1;
 		goto out;
@@ -563,7 +581,7 @@ int main(int argc, char *argv[])
 		else
 			cmd_index = atoi(console_input);
 
-printf("~~~~~cmd_index:%d, %s\n", cmd_index, console_input);
+printf("~~~~~imput:%s, %lu\n", console_input, strlen(console_input));
 
 		__clear_window();
 
