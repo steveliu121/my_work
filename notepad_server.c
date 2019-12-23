@@ -266,7 +266,6 @@ static void do_login(const int sockfd, const char *name, char *username)
 {
 	char path[128] = {0};
 	char msg[128] = {0};
-	int ret = 0;
 
 	snprintf(path, sizeof(path) - 1, "%s/%s", FILE_DIR, name);
 	if (access(path, F_OK)) {
@@ -274,7 +273,8 @@ static void do_login(const int sockfd, const char *name, char *username)
 		__send_response(sockfd, msg);
 	}
 	else {
-		strncpy(username, name, sizeof(username) - 1);
+		/*TODO zero*/
+		strncpy(username, name, sizeof(name));
 		strcpy(msg, "success");
 		__send_response(sockfd, msg);
 	}
@@ -295,7 +295,6 @@ static void do_list(const int sockfd, const char *username)
 		return;
 	}
 
-	/*TODO dose tmpfile could be sendfile??*/
 	/*获取文件列表（记事本列表）并发送给客户端*/
 	/*创建一个临时文件来缓存未知大小的文件列表数据，模仿stream缓存*/
 	snprintf(tmp_file, sizeof(tmp_file) - 1, "%s/%s", FILE_DIR, TMP_FILE);
@@ -344,6 +343,7 @@ static void do_create(const int sockfd, const char *file, const char *username)
 	char buf[4096] = {0};
 	int success = 1;
 	int size = 0;
+	int first = 1;
 	int ret = 0;
 
 	/*检查用户是否已经登录*/
@@ -392,6 +392,15 @@ static void do_create(const int sockfd, const char *file, const char *username)
 			success = 0;
 			goto out;
 		}
+
+		/*如果是一个空文件，则客户端会发送一个"$empty$file$"标记帧*/
+		if (first == 1) {
+			if (!strcmp(buf, "$empty$file$")) {
+printf("~~~~~get an empty file\n");
+				break;
+			}
+		}
+		first = 0;
 
 		size = ret;
 		ret = write(fd, buf, size);
@@ -448,16 +457,17 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 	int fd = -1;
 	int size = 0;
 	int success = 1;
+	int first = 1;
 	int ret = 0;
 
-	/*检查用户是否已经登录*/
+	/*1. 检查用户是否已经登录*/
 	if (!strncmp("null", username, strlen(username))) {
 		strcpy(msg, "Please login first\n");
 		__send_response(sockfd, msg);
 		return;
 	}
 
-	/*检查文件是否已经存在*/
+	/*2. 检查文件是否已经存在*/
 	snprintf(path, sizeof(path) - 1, "%s/%s/", FILE_DIR, username);
 	strcat(path, file);
 	if (access(path, F_OK)) {
@@ -466,7 +476,7 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 		return;
 	}
 
-	/*将文件发送给客户端，以供客户端编辑*/
+	/*3. 将文件发送给客户端，以供客户端编辑*/
 	size = __get_file_size(path);
 	fd = open(path, O_RDWR, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
@@ -476,15 +486,38 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 	}
 	strcpy(msg, "success");
 	__send_response(sockfd, msg);
-	usleep(200000);
-	/*TODO fix packet adhesion in userspace layer*/
-	ret = sendfile(sockfd, fd, NULL, size);
-	if (ret != size)
-		fprintf(stderr, "Send file to client error, [%s]\n", strerror(errno));
-	close(fd);
-	fd = -1;
 
-	/*等待客户端编辑完成后将文件发送回来*/
+	/*3. 等待客户端发送开始信号*/
+	bzero(msg, sizeof(msg));
+	ret = recv(sockfd, msg, sizeof(msg) - 1, 0);
+	if (ret == -1) {
+		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
+		return;
+	}
+	else if (strcmp(msg, "start")) {
+		fprintf(stdout, "Recv message [%s], but not [start]\n", msg);
+		return;
+	}
+
+	/*4. 将文件发送给客户端*/
+	/*如果是一个空文件，则向客户端发送一个"$empty$file"标记帧*/
+	if (size == 0) {
+		bzero(msg, sizeof(msg));
+		strcpy(msg, "$empty$file$");
+		ret = send(sockfd, msg, strlen(msg), 0);
+		if (ret != strlen(msg)) {
+			fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
+			return;
+		}
+	} else {
+		ret = sendfile(sockfd, fd, NULL, size);
+		if (ret != size)
+			fprintf(stderr, "Send file to client error, [%s]\n", strerror(errno));
+		close(fd);
+		fd = -1;
+	}
+
+	/*5. 等待客户端编辑完成后将文件发送回来*/
 	fd = open(path, O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
 		strcpy(msg, "Could not save notepad\n");
@@ -500,6 +533,16 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 			success = 0;
 			goto out;
 		}
+
+printf("~~~~~file%s\n", buf);
+		/*如果是一个空文件，则客户端会发送一个"$empty$file$"标记帧*/
+		if (first == 1) {
+			if (!strcmp(buf, "$empty$file$")) {
+printf("~~~~~get an empty file\n");
+				break;
+			}
+		}
+		first = 0;
 
 		size = ret;
 		ret = write(fd, buf, size);
@@ -626,7 +669,6 @@ out:
 int main(int argc, char *argv[])
 {
 	int opt;
-	int sockfd = -1;
 	int own_port = 0;
 	int ret = 0;
 

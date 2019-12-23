@@ -62,6 +62,17 @@ static void __clear_window(void)
 	/* fprintf(stdout, "\033c"); */
 }
 
+/**
+ * 编辑记事本
+ * */
+static void __edit_file(const char *file_name)
+{
+	char vim_cmd[256] = {0};
+
+	sprintf(vim_cmd, "vi %s", file_name);
+	system(vim_cmd);
+}
+
 static void __get_username(char *username)
 {
 	char console_input[128] = {0};
@@ -86,6 +97,7 @@ static void __get_notepad(char *notepad)
 
 static int __send_file(const int sockfd, const char *file)
 {
+	char msg[256] = {0};
 	char buf[256] = {0};
 	int size = 0;
 	int fd = -1;
@@ -100,11 +112,22 @@ static int __send_file(const int sockfd, const char *file)
 		goto out;
 	}
 
-	ret = sendfile(sockfd, fd, NULL, size);
-	if (ret != size) {
-		fprintf(stderr, "Send file to server error, [%s]\n", strerror(errno));
-		ret = -1;
-		goto out;
+	/*如果是一个空文件，则向服务器发送一个"$empty$file"标记帧*/
+	if (size == 0) {
+		strcpy(msg, "$empty$file$");
+		ret = send(sockfd, msg, strlen(msg), 0);
+		if (ret != strlen(msg)) {
+			fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
+			ret = -1;
+			goto out;
+		}
+	} else {
+		ret = sendfile(sockfd, fd, NULL, size);
+		if (ret != size) {
+			fprintf(stderr, "Send file to server error, [%s]\n", strerror(errno));
+			ret = -1;
+			goto out;
+		}
 	}
 
 	ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
@@ -145,7 +168,7 @@ printf("~~~~~send:%s, %d\n", send_buf, send_len);
 	}
 
 	ret = recv(sockfd, recv_buf, recv_size, 0);
-printf("~~~~~recv:%s, %lu\n", recv_buf, strlen(recv_buf));
+printf("~~~~~recv:%s, %u\n", recv_buf, strlen(recv_buf));
 	if (ret == -1) {
 		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -274,9 +297,7 @@ static int notepad_create(const int sockfd)
 	char buf[256] = {0};
 	int msg_len = 0;
 	char file[256] = {0};
-	char sys_cmd[256] = {0};
 	int fd = -1;
-	int size = 0;
 	int ret = 0;
 
 	__get_notepad(notepad);
@@ -308,8 +329,7 @@ static int notepad_create(const int sockfd)
 	}
 
 	/*3. 编辑文件*/
-	snprintf(sys_cmd, sizeof(sys_cmd) - 1, "vi %s", file);
-	system(sys_cmd);
+	__edit_file(file);
 
 	/*4. 将文件发送给服务器*/
 	__send_file(sockfd, file);
@@ -366,9 +386,9 @@ static int notepad_edit(const int sockfd)
 	char buf[4096] = {0};
 	int msg_len = 0;
 	char file[256] = {0};
-	char sys_cmd[256] = {0};
 	int fd = -1;
 	int size = 0;
+	int first = 1;
 	int ret = 0;
 
 	__get_notepad(notepad);
@@ -387,7 +407,17 @@ static int notepad_edit(const int sockfd)
 		goto out;
 	}
 
-	/*2. 创建本地临时文件*/
+	/*2. 通知服务器将记事本发送过来以供编辑*/
+	strcpy(msg, "start");
+	ret = send(sockfd, msg, strlen(msg), 0);
+printf("~~~~~send:%s\n", msg);
+	if (ret != strlen(msg)) {
+		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
+		ret = -1;
+		goto out;
+	}
+
+	/*3. 创建本地临时文件*/
 	snprintf(file, sizeof(file) - 1, "%s/%s", FILE_DIR, notepad);
 	fd = open(file, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
@@ -396,7 +426,7 @@ static int notepad_edit(const int sockfd)
 		goto out;
 	}
 
-	/*3. 接受服务器发送过来的记事本并保存到本地临时文件*/
+	/*4. 接受服务器发送过来的记事本并保存到本地临时文件*/
 	do {
 printf("~~~~%d\n", __LINE__);
 /*TODO not block here in case there's no data*/
@@ -407,23 +437,31 @@ printf("~~~~%d\n", __LINE__);
 			goto out;
 		}
 
+		/*如果是一个空文件，则服务器会发送一个"$empty$file$"标记帧*/
+		if (first == 1) {
+			if (!strcmp(buf, "$empty$file$")) {
+printf("~~~~~get an empty file\n");
+				break;
+			}
+		}
+		first = 0;
+
 		size = ret;
 		ret = write(fd, buf, size);
 		if (ret != size)
 			fprintf(stderr, "Write file error, [%s]\n", strerror(errno));
 
 	} while (ret == (sizeof(buf) - 1));
-
+	ret = 0;
 	close(fd);
 
-	/*3. 对记事本进行本地编辑*/
-	snprintf(sys_cmd, sizeof(sys_cmd) - 1, "vi %s", file);
-	system(sys_cmd);
+	/*5. 对记事本进行本地编辑*/
+	__edit_file(file);
 
-	/*4. 上传记事本到服务器*/
+	/*6. 上传记事本到服务器*/
 	__send_file(sockfd, file);
 
-	/*5. 删除本地临时文件*/
+	/*7. 删除本地临时文件*/
 	remove(file);
 
 out:
@@ -431,17 +469,6 @@ out:
 		fprintf(stdout, "Edit notepad [%s] fail\n", notepad);
 
 	return ret;
-}
-
-/**
- * 编辑记事本
- * */
-static void edit_file(const char *file_name)
-{
-	char vim_cmd[256] = {0};
-
-	sprintf(vim_cmd, "vi %s", file_name);
-	system(vim_cmd);
 }
 
 /**
@@ -502,10 +529,9 @@ out:
  * */
 static void server_teardown(const int sockfd)
 {
-	char message[6] = "quit";
-	int ret = 0;
+	char message[16] = "quit:this";
 
-	send(sockfd, message ,sizeof(message), 0);
+	send(sockfd, message , strlen(message), 0);
 	close(sockfd);
 }
 
@@ -515,7 +541,6 @@ int main(int argc, char *argv[])
 	int sockfd = -1;
 	char peer_ip[16] = {0};
 	int peer_port = 0;
-	char file_name[128] = {0};
 	char console_input[128] = {0};
 	int cmd_index = -1;
 	int success = 0;
@@ -574,7 +599,7 @@ int main(int argc, char *argv[])
 		else
 			cmd_index = atoi(console_input);
 
-printf("~~~~~imput:%s, %lu\n", console_input, strlen(console_input));
+printf("~~~~~imput:%s, %u\n", console_input, strlen(console_input));
 
 		__clear_window();
 
