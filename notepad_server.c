@@ -273,8 +273,8 @@ static void do_login(const int sockfd, const char *name, char *username)
 		__send_response(sockfd, msg);
 	}
 	else {
-		/*TODO zero*/
-		strncpy(username, name, sizeof(name));
+		/*TODO*/
+		strcpy(username, name);
 		strcpy(msg, "success");
 		__send_response(sockfd, msg);
 	}
@@ -347,7 +347,7 @@ static void do_create(const int sockfd, const char *file, const char *username)
 	int ret = 0;
 
 	/*检查用户是否已经登录*/
-	if (!strncmp("null", username, strlen(username))) {
+	if (!strcmp("null", username)) {
 		strcpy(msg, "Please login first\n");
 		__send_response(sockfd, msg);
 		return;
@@ -428,7 +428,7 @@ static void do_delete(const int sockfd, const char *file, const char *username)
 	char msg[128] = {0};
 
 	/*检查用户是否已经登录*/
-	if (!strncmp("null", username, strlen(username))) {
+	if (!strcmp("null", username)) {
 		strcpy(msg, "Please login first\n");
 		__send_response(sockfd, msg);
 		return;
@@ -461,7 +461,7 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 	int ret = 0;
 
 	/*1. 检查用户是否已经登录*/
-	if (!strncmp("null", username, strlen(username))) {
+	if (!strcmp("null", username)) {
 		strcpy(msg, "Please login first\n");
 		__send_response(sockfd, msg);
 		return;
