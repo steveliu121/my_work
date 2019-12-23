@@ -21,7 +21,6 @@
 
 #include "utils.h"
 
-/*TODO segmentfault when quit*/
 #define FILE_DIR "./notepad"
 #define TMP_FILE ".tmpfile"
 
@@ -134,7 +133,7 @@ static int __get_ipaddr(const int sockfd)
 
 	port = ntohs(own_addr.sin_port);
 
-	fprintf(stdout, "######Server ipaddr:[%s], port:[%d]\n", buf, port);
+	/* fprintf(stdout, "######Server ipaddr:[%s], port:[%d]\n", buf, port); */
 
 out:
 	if (ret)
@@ -210,10 +209,9 @@ static int inline __poll(const int sockfd, int timeout_ms, short events)
 		fprintf(stderr, "Socket poll fail, %s\n", strerror(errno));
 		ret = -1;
 	}
-	if (ret == 0) {
-		fprintf(stderr, "Socket poll timeout\n");
+	if (ret == 0)
+		/* fprintf(stderr, "Socket poll timeout\n"); */
 		return -1;
-	}
 
 	if (pfd.revents & events)
 		return 0;
@@ -229,7 +227,6 @@ static int __send_response(const int sockfd, const char *msg)
 	int msg_len = strlen(msg);
 
 	ret = send(sockfd, msg, msg_len, 0);
-printf("~~~~~send:%s, %d\n", msg, msg_len);
 	if (ret != msg_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -273,7 +270,6 @@ static void do_login(const int sockfd, const char *name, char *username)
 		__send_response(sockfd, msg);
 	}
 	else {
-		/*TODO*/
 		strcpy(username, name);
 		strcpy(msg, "success");
 		__send_response(sockfd, msg);
@@ -395,10 +391,8 @@ static void do_create(const int sockfd, const char *file, const char *username)
 
 		/*如果是一个空文件，则客户端会发送一个"$empty$file$"标记帧*/
 		if (first == 1) {
-			if (!strcmp(buf, "$empty$file$")) {
-printf("~~~~~get an empty file\n");
+			if (!strcmp(buf, "$empty$file$"))
 				break;
-			}
 		}
 		first = 0;
 
@@ -534,13 +528,10 @@ static void do_edit(const int sockfd, const char *file, const char *username)
 			goto out;
 		}
 
-printf("~~~~~file%s\n", buf);
 		/*如果是一个空文件，则客户端会发送一个"$empty$file$"标记帧*/
 		if (first == 1) {
-			if (!strcmp(buf, "$empty$file$")) {
-printf("~~~~~get an empty file\n");
+			if (!strcmp(buf, "$empty$file$"))
 				break;
-			}
 		}
 		first = 0;
 
@@ -614,8 +605,6 @@ static void *__work_thread(void *arg)
 		recv_len = recv(sockfd, buf, sizeof(buf) - 1, 0);
 		if (recv_len == -1)
 			fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
-
-printf("~~~~~~recv:%s\n", buf);
 
 		ret = do_job(sockfd, buf, recv_len, username);
 		/*接收到客户端的quit信息后，跳出循环*/

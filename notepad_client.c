@@ -59,7 +59,7 @@ static void print_usage(void)
  * */
 static void __clear_window(void)
 {
-	/* fprintf(stdout, "\033c"); */
+	fprintf(stdout, "\033c");
 }
 
 /**
@@ -160,7 +160,6 @@ static int __send_and_recv(const int sockfd,
 	int ret = 0;
 
 	ret = send(sockfd, send_buf, send_len, 0);
-printf("~~~~~send:%s, %d\n", send_buf, send_len);
 	if (ret != send_len) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -168,7 +167,6 @@ printf("~~~~~send:%s, %d\n", send_buf, send_len);
 	}
 
 	ret = recv(sockfd, recv_buf, recv_size, 0);
-printf("~~~~~recv:%s, %u\n", recv_buf, strlen(recv_buf));
 	if (ret == -1) {
 		fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -410,7 +408,6 @@ static int notepad_edit(const int sockfd)
 	/*2. 通知服务器将记事本发送过来以供编辑*/
 	strcpy(msg, "start");
 	ret = send(sockfd, msg, strlen(msg), 0);
-printf("~~~~~send:%s\n", msg);
 	if (ret != strlen(msg)) {
 		fprintf(stdout, "Send message fail, [%s]\n", strerror(errno));
 		ret = -1;
@@ -428,8 +425,6 @@ printf("~~~~~send:%s\n", msg);
 
 	/*4. 接受服务器发送过来的记事本并保存到本地临时文件*/
 	do {
-printf("~~~~%d\n", __LINE__);
-/*TODO not block here in case there's no data*/
 		ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
 		if (ret == -1) {
 			fprintf(stdout, "Recv message fail, [%s]\n", strerror(errno));
@@ -439,10 +434,8 @@ printf("~~~~%d\n", __LINE__);
 
 		/*如果是一个空文件，则服务器会发送一个"$empty$file$"标记帧*/
 		if (first == 1) {
-			if (!strcmp(buf, "$empty$file$")) {
-printf("~~~~~get an empty file\n");
+			if (!strcmp(buf, "$empty$file$"))
 				break;
-			}
 		}
 		first = 0;
 
@@ -576,7 +569,7 @@ int main(int argc, char *argv[])
 	}
 
 	sockfd = server_connect(peer_ip, peer_port);
-	if (ret) {
+	if (sockfd == -1) {
 		fprintf(stderr, "Connect to notepad server fail\n");
 		return -1;
 	}
@@ -587,7 +580,6 @@ int main(int argc, char *argv[])
 		goto exit;
 
 	while (!g_exit) {
-		__clear_window();
 		fprintf(stdout, "\n======Register\\Login=======\n");
 		fprintf(stdout, "1. Register:\n");
 		fprintf(stdout, "2. Login:\n");
@@ -598,8 +590,6 @@ int main(int argc, char *argv[])
 			goto exit;
 		else
 			cmd_index = atoi(console_input);
-
-printf("~~~~~imput:%s, %u\n", console_input, strlen(console_input));
 
 		__clear_window();
 
@@ -616,6 +606,8 @@ printf("~~~~~imput:%s, %u\n", console_input, strlen(console_input));
 				break;
 		}
 
+		__clear_window();
+
 		if (success) {
 			success = 0;
 			break;
@@ -626,7 +618,6 @@ printf("~~~~~imput:%s, %u\n", console_input, strlen(console_input));
 
 
 	while (!g_exit) {
-		__clear_window();
 		fprintf(stdout, "======Enjoy you notepad=======\n");
 		fprintf(stdout, "1. List all your notepads\n");
 		fprintf(stdout, "2. Create a new notepad\n");

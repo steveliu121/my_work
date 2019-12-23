@@ -47,12 +47,9 @@ int __create_cache_dir(const char *dir)
 {
 	int ret = 0;
 
-	if (!access(dir, F_OK)) {
-		fprintf(stdout, "Cache directory already exist\n");
+	if (!access(dir, F_OK))
+		/* fprintf(stdout, "Cache directory already exist\n"); */
 		return 0;
-	}
-
-printf("~~~~~mkdir:%s\n", dir);
 
 	ret = mkdir(dir, S_IRWXU | S_IRWXG | S_IROTH);
 	if (ret) {
